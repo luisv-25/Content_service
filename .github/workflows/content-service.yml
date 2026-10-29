@@ -1,0 +1,60 @@
+name: CI - content-service
+
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-check:
+    name: Instalar, compilar y validar imagen Docker
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./content-service
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependencias
+        run: npm install
+
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Compilar (tsc)
+        run: npm run build
+
+
+      - name: Tests
+        run: npm test --if-present
+
+      - name: Build de la imagen Docker
+        run: docker build -t content-service:ci .
+
+  deploy:
+    name: Disparar deploy en Render
+    needs: build-and-check
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar Deploy Hook de Render
+        run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "Falta el secret RENDER_DEPLOY_HOOK_URL en este repositorio (Settings > Secrets and variables > Actions). Ver LEEME.md."
+            exit 1
+          fi
+          curl -sS -f -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
