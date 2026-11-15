@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { AppModule } from "./app.module";
+import { setupMetrics } from "./metrics";
 
 // Content Service es prácticamente independiente del resto (sección 5.7
 // del documento): no publica ni consume eventos de RabbitMQ, solo expone
@@ -9,6 +10,7 @@ import { AppModule } from "./app.module";
 // para resolver quién puede ver cada archivo.
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  setupMetrics(app);
   app.enableCors();
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.setGlobalPrefix("api/v1");
