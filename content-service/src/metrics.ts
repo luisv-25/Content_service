@@ -1,58 +1,72 @@
 import { INestApplication } from "@nestjs/common";
-import { Counter, Histogram, Registry, collectDefaultMetrics } from "prom-client";
+import { collectDefaultMetrics, Counter, Histogram, Registry } from "prom-client";
+import { DataSource } from "typeorm";
 
-// Métricas para Prometheus (sección de observabilidad). Cada microservicio
-// expone GET /metrics (fuera del prefijo /api/v1) con:
-//   - métricas por defecto de Node (CPU, memoria, event loop, GC),
-//   - http_requests_total{method,route,status_code},
-//   - http_request_duration_seconds (histograma, para latencia p50/p95/p99).
-// "route" es la ruta con parámetros (/api/v1/users/:id), no la URL real,
-// para que no se multipliquen las series por cada id distinto.
-// Si se define METRICS_TOKEN en el entorno, /metrics exige "Authorization:
-// Bearer <token>" (Prometheus lo envía con `authorization` en su config).
-export function setupMetrics(app: INestApplication) {
+// Métricas para Prometheus (sección de observabilidad). Este mismo archivo se
+// copia sin cambios a los 9 microservicios; lo único que varía es el nombre
+// del servicio que se pasa en main.ts. Expone GET /metrics (sin el prefijo
+// /api/v1, que es lo que Prometheus consulta por defecto) con:
+//   - métricas del proceso Node: CPU, memoria, event loop, GC (prefijo "educonecta_")
+//   - http_requests_total{service,method,route,status}: cuántas peticiones, por ruta y código
+//   - http_request_duration_seconds{...}: histograma de latencia por ruta
+// "route" usa la ruta con parámetros (/api/v1/users/:id), no la URL real, para
+// que no se creen series infinitas.
+//
+// Este archivo también expone la salud del servicio (también fuera de /api/v1):
+//   GET /health  -> "vivo": el proceso responde (no toca la base de datos).
+//   GET /ready   -> "listo": además hace SELECT 1 a su base de datos; 503 si no hay conexión.
+export function setupMetrics(app: INestApplication, serviceName: string) {
   const registry = new Registry();
-  collectDefaultMetrics({ register: registry });
+  registry.setDefaultLabels({ service: serviceName });
+  collectDefaultMetrics({ register: registry, prefix: "educonecta_" });
 
   const httpRequests = new Counter({
     name: "http_requests_total",
-    help: "Total de peticiones HTTP atendidas",
-    labelNames: ["method", "route", "status_code"],
+    help: "Total de peticiones HTTP",
+    labelNames: ["method", "route", "status"],
     registers: [registry],
   });
   const httpDuration = new Histogram({
     name: "http_request_duration_seconds",
     help: "Duración de las peticiones HTTP en segundos",
-    labelNames: ["method", "route", "status_code"],
-    buckets: [0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+    labelNames: ["method", "route", "status"],
+    buckets: [0.01, 0.05, 0.1, 0.3, 0.5, 1, 2, 5, 10],
     registers: [registry],
   });
 
-  const adapter = app.getHttpAdapter();
-  const server = adapter.getInstance();
+  const http = app.getHttpAdapter();
 
-  server.use((req: any, res: any, next: () => void) => {
-    if (req.path === "/metrics") return next();
-    const stopTimer = httpDuration.startTimer();
+  app.use((req: any, res: any, next: () => void) => {
+    if (req.path === "/metrics") return next(); // no medirse a sí mismo
+    const end = httpDuration.startTimer();
     res.on("finish", () => {
-      const labels = {
-        method: req.method,
-        route: req.route?.path ?? "unmatched",
-        status_code: String(res.statusCode),
-      };
+      const route = req.route?.path ? `${req.baseUrl || ""}${req.route.path}` : "no_encontrada";
+      const labels = { method: req.method, route, status: String(res.statusCode) };
       httpRequests.inc(labels);
-      stopTimer(labels);
+      end(labels);
     });
     next();
   });
 
-  adapter.get("/metrics", async (req: any, res: any) => {
-    const token = process.env.METRICS_TOKEN;
-    if (token && req.headers["authorization"] !== `Bearer ${token}`) {
-      res.status(401).send("unauthorized");
-      return;
+  http.get("/health", (_req: any, res: any) => {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ status: "ok", service: serviceName, uptime: Math.round(process.uptime()) }));
+  });
+
+  http.get("/ready", async (_req: any, res: any) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const ds = app.get(DataSource, { strict: false });
+      await ds.query("SELECT 1");
+      res.end(JSON.stringify({ status: "ready", service: serviceName, database: "up" }));
+    } catch (err: any) {
+      res.statusCode = 503;
+      res.end(JSON.stringify({ status: "not_ready", service: serviceName, database: "down" }));
     }
-    res.set("Content-Type", registry.contentType);
+  });
+
+  http.get("/metrics", async (_req: any, res: any) => {
+    res.setHeader("Content-Type", registry.contentType);
     res.end(await registry.metrics());
   });
 }
