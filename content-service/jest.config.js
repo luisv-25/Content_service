@@ -1,0 +1,20 @@
+module.exports = {
+  preset: "ts-jest",
+  testEnvironment: "node",
+  roots: ["<rootDir>/tests", "<rootDir>/src"],
+  testMatch: ["**/*.spec.ts"],
+  globalSetup: "<rootDir>/tests/helpers/global-setup.js",
+  setupFiles: ["<rootDir>/tests/helpers/set-env.ts"],
+  transform: { "^.+\\.ts$": ["ts-jest", { tsconfig: "tsconfig.test.json" }] },
+  testTimeout: 30000,
+  collectCoverageFrom: [
+    "src/**/*.ts",
+    "!src/main.ts",
+    "!src/metrics.ts",
+    "!src/**/*.module.ts",
+    "!src/**/dto/**",
+    "!src/**/entities/**",
+  ],
+  coverageDirectory: "coverage",
+  coverageReporters: ["text", "text-summary", "lcov", "json-summary"],
+};
