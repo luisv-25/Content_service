@@ -10,7 +10,7 @@ import { setupMetrics } from "./metrics";
 // para resolver quién puede ver cada archivo.
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  setupMetrics(app);
+  setupMetrics(app, "content-service");
   app.enableCors();
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.setGlobalPrefix("api/v1");
