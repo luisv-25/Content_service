@@ -1,0 +1,29 @@
+name: CD - content-service
+
+# CD: se ejecuta al integrar cambios a la rama principal (main). Primero corre el workflow de
+# CI (pruebas unitarias + integración + cobertura + imagen Docker) y el despliegue DEPENDE de
+# que todo eso haya pasado (needs: ci). El despliegue a Render se dispara con su Deploy Hook,
+# guardado como secreto del repositorio (RENDER_DEPLOY_HOOK_URL), nunca escrito aquí.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    name: CI (pruebas y cobertura)
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Desplegar en Render
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar Deploy Hook de Render
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Falta el secreto RENDER_DEPLOY_HOOK_URL (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          curl -sS -f -X POST "$RENDER_DEPLOY_HOOK_URL"
